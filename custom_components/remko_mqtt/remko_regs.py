@@ -98,6 +98,7 @@ REMKO_REGISTERS = [
     ("energy_thermal", ["5119", "sensor_en", "kWh", "", "", "", False], ALL),
     ("hc1_return_temp", ["5123", "sensor_temp", "ºC", "", "", "", False], ALL),
     ("hc1_flow_temp", ["5124", "sensor_temp", "ºC", "", "", "", False], ALL),
+    ("heizkurve_hk1", ["1251", "heizkurve", "", "", "", "", False], ALL),
     ("storage_tank_status", ["5130", "sensor_mode", "", "", "", "", False], ALL),
     ("buff_temp", ["5131", "sensor_temp", "ºC", "", "", "", False], ALL),
     ("hp_flow_temp", ["5132", "sensor_temp", "ºC", "", "", "", False], ALL),
@@ -267,6 +268,10 @@ remko_reg_translation = {
         "Leistungsbegr. HZG (reduziert)",
     ],
     "heating_power_limit_normal": ["Capacity limit HTG", "Leistungsbegr. HZG"],
+    "heizkurve_hk1": [
+        "Heating curve (unmixed circuit)",
+        "Heizkurve (Ungemischter Kreis)",
+    ],
     "hp_flow_temp": ["Flow temp.", "Vorlauftemp."],
     "hp_mode": ["Heat pump mode", "Wärmepumpenmodus"],
     "hp_return_temp": ["Return temp.", "Rücklauftemp."],

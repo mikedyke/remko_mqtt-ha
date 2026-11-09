@@ -31,6 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Constants
 _SENSOR_TYPES = {
+    "heizkurve",
     "sensor",
     "sensor_counter",
     "sensor_el",
@@ -54,6 +55,7 @@ _ICON_MAPPING = {
     "sensor_counter": "mdi:counter",
     "sensor_num": "mdi:numeric",
     "timeprogram": "mdi:calendar-clock",
+    "heizkurve": "mdi:chart-bell-curve-cumulative",
 }
 
 _UNIT_MAPPING = {
@@ -197,6 +199,18 @@ class HeatPumpSensor(SensorEntity):
             if isinstance(timeprogram, dict) and "mon" in timeprogram:
                 attributes["timeprogram"] = timeprogram
 
+        if self._reg_type == "heizkurve":
+            curve = self._heatpump.get_value(self._reg_id)
+            if isinstance(curve, dict):
+                attributes["fusspunkt"] = curve.get("fusspunkt")
+                attributes["norm_vorlauftemperatur"] = curve.get(
+                    "norm_vorlauftemperatur"
+                )
+                # Unconfirmed meaning, kept for transparency / future write
+                # round-trip - see HeatPump._decode_heizkurve.
+                attributes["word1_unconfirmed"] = curve.get("word1")
+                attributes["word2_unconfirmed"] = curve.get("word2")
+
         return attributes
 
     def _configure_sensor_type(self, reg_type: str, reg_unit: str | None) -> None:
@@ -204,7 +218,12 @@ class HeatPumpSensor(SensorEntity):
         # State class
         if reg_type in _STATE_CLASS_MAPPING:
             self._attr_state_class = _STATE_CLASS_MAPPING[reg_type]
-        elif reg_type not in ("generated_sensor", "sensor_mode", "timeprogram"):
+        elif reg_type not in (
+            "generated_sensor",
+            "sensor_mode",
+            "timeprogram",
+            "heizkurve",
+        ):
             self._attr_state_class = SensorStateClass.MEASUREMENT
 
         # Icon
@@ -263,6 +282,10 @@ class HeatPumpSensor(SensorEntity):
                 new_state = "loaded"
             else:
                 return
+        elif self._reg_type == "heizkurve":
+            new_state = self._format_heizkurve_state(value)
+            if new_state is None:
+                return
         else:
             new_state = value
 
@@ -310,6 +333,17 @@ class HeatPumpSensor(SensorEntity):
         self.async_write_ha_state()
         _LOGGER.debug("Timeprogram sent and state updated for %s", self.entity_id)
 
+    @staticmethod
+    def _format_heizkurve_state(value: Any) -> str | None:
+        """Format the Heizkurve dict as 'Fusspunkt/Norm-Vorlauf °C'."""
+        if not isinstance(value, dict):
+            return None
+        fusspunkt = value.get("fusspunkt")
+        norm_vorlauf = value.get("norm_vorlauftemperatur")
+        if fusspunkt is None or norm_vorlauf is None:
+            return None
+        return f"{fusspunkt:.1f}/{norm_vorlauf:.1f}"
+
     async def async_update(self) -> None:
         """Fetch latest value from heat pump and update state."""
         _LOGGER.debug("Updating sensor state for %s", self._reg_name)
@@ -327,5 +361,9 @@ class HeatPumpSensor(SensorEntity):
         if self._reg_type == "timeprogram":
             if isinstance(value, dict):
                 self._state = "loaded"
+        elif self._reg_type == "heizkurve":
+            new_state = self._format_heizkurve_state(value)
+            if new_state is not None:
+                self._state = new_state
         else:
             self._state = value
