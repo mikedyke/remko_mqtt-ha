@@ -11,6 +11,7 @@ from typing import Any
 from homeassistant.components import mqtt
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
 
@@ -22,6 +23,15 @@ from .const import (
     CONF_MODEL,
     CONF_MQTT_NODE,
     DOMAIN,
+)
+from .heizkurve_converter import (
+    FUSSPUNKT_MAX,
+    FUSSPUNKT_MIN,
+    NORM_VORLAUF_MAX,
+    NORM_VORLAUF_MIN,
+    STEP,
+    decode_heizkurve,
+    encode_heizkurve,
 )
 from .remko_regs import get_remko_regs, remko_reg_translation
 from .timeprogram_converter import RemkoTimeProgramConverter
@@ -190,7 +200,7 @@ class HeatPump:
         elif reg_type == "timeprogram":
             self._hpstate[reg_id] = RemkoTimeProgramConverter.hex_to_timeprogram(value)
         elif reg_type == "heizkurve":
-            self._hpstate[reg_id] = self._decode_heizkurve(value)
+            self._hpstate[reg_id] = decode_heizkurve(value)
         elif reg_type == "sensor_el":
             if (
                 reg_id not in self._reg_time
@@ -229,36 +239,6 @@ class HeatPump:
             self._hpstate[reg_id] = self._get_select_mode(self._reg_name[reg_id], value)
         elif reg_type == "binary_sensor":
             self._hpstate[reg_id] = f"{int(value, 16):02X}"
-
-    @staticmethod
-    def _decode_heizkurve(value: str) -> dict[str, float] | None:
-        """Decode the packed 4x16-bit Heizkurve register (unmixed circuit).
-
-        Confirmed live (2026-11-09, two independent write tests cross-checked
-        against the SmartWeb UI): word 3 = Norm-Vorlauftemperatur, word 4 =
-        Fusspunkt, both x10. Words 1-2 are live-recomputed display values
-        (shift even when neither is edited) with unconfirmed meaning - kept
-        verbatim here for a future write round-trip, never exposed as a
-        temperature since they are not plausible °C values at either curve
-        endpoint.
-        """
-        if not value or len(value) != 16:
-            _LOGGER.error("Unexpected Heizkurve payload length: %s", value)
-            return None
-        try:
-            word1 = int(value[0:4], 16)
-            word2 = int(value[4:8], 16)
-            word3 = int(value[8:12], 16)
-            word4 = int(value[12:16], 16)
-        except ValueError:
-            _LOGGER.error("Invalid Heizkurve payload: %s", value)
-            return None
-        return {
-            "word1": word1,
-            "word2": word2,
-            "norm_vorlauftemperatur": word3 / 10.0,
-            "fusspunkt": word4 / 10.0,
-        }
 
     def _get_select_mode(self, reg_id: str, value: str) -> str:
         """Get select mode display name from register value."""
@@ -371,6 +351,44 @@ class HeatPump:
 
         await asyncio.sleep(_MQTT_SLEEP_DURATION)
         self._hass.bus.fire(f"{self._domain}_{self._id}_msg_rec_event", {})
+
+    async def set_heizkurve_point(
+        self, reg_name: str, point: str, value: float
+    ) -> None:
+        """Change one heating curve point, resending the other one unchanged."""
+        reg_id = self._remko_reg[reg_name][0]
+        curve = self._hpstate.get(reg_id)
+        if not isinstance(curve, dict):
+            raise HomeAssistantError(
+                "Heating curve has not been received from the heat pump yet"
+            )
+
+        low, high = {
+            "fusspunkt": (FUSSPUNKT_MIN, FUSSPUNKT_MAX),
+            "norm_vorlauftemperatur": (NORM_VORLAUF_MIN, NORM_VORLAUF_MAX),
+        }[point]
+        if not low <= value <= high or (value / STEP) % 1:
+            raise ServiceValidationError(
+                f"{point} must be between {low} and {high} °C in {STEP} °C steps"
+            )
+
+        points = {
+            "fusspunkt": curve["fusspunkt"],
+            "norm_vorlauftemperatur": curve["norm_vorlauftemperatur"],
+            point: value,
+        }
+        if points["norm_vorlauftemperatur"] < points["fusspunkt"]:
+            raise ServiceValidationError(
+                "Norm-Vorlauftemperatur must not be below the Fusspunkt"
+            )
+
+        payload = encode_heizkurve(
+            points["fusspunkt"], points["norm_vorlauftemperatur"]
+        )
+        # Optimistic, so a quick follow-up edit of the other point builds on
+        # this one; the heat pump's next broadcast overwrites it either way.
+        self._hpstate[reg_id] = decode_heizkurve(payload)
+        await self.send_mqtt_reg(reg_name, payload)
 
     def _build_mqtt_payload(
         self, reg_id: str, reg_type: str, reg_name: str, value: Any

@@ -272,6 +272,14 @@ remko_reg_translation = {
         "Heating curve (unmixed circuit)",
         "Heizkurve (Ungemischter Kreis)",
     ],
+    "heizkurve_hk1_fusspunkt": [
+        "Heating curve base point",
+        "Heizkurve Fußpunkt",
+    ],
+    "heizkurve_hk1_norm_vorlauftemperatur": [
+        "Heating curve design flow temp.",
+        "Heizkurve Norm-Vorlauftemperatur",
+    ],
     "hp_flow_temp": ["Flow temp.", "Vorlauftemp."],
     "hp_mode": ["Heat pump mode", "Wärmepumpenmodus"],
     "hp_return_temp": ["Return temp.", "Rücklauftemp."],

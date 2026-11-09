@@ -202,14 +202,7 @@ class HeatPumpSensor(SensorEntity):
         if self._reg_type == "heizkurve":
             curve = self._heatpump.get_value(self._reg_id)
             if isinstance(curve, dict):
-                attributes["fusspunkt"] = curve.get("fusspunkt")
-                attributes["norm_vorlauftemperatur"] = curve.get(
-                    "norm_vorlauftemperatur"
-                )
-                # Unconfirmed meaning, kept for transparency / future write
-                # round-trip - see HeatPump._decode_heizkurve.
-                attributes["word1_unconfirmed"] = curve.get("word1")
-                attributes["word2_unconfirmed"] = curve.get("word2")
+                attributes.update(curve)
 
         return attributes
 

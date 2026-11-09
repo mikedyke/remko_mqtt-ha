@@ -13,6 +13,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_ID, CONF_NAME, CONF_VER, DOMAIN
 from .heatpump import HeatPump
+from .heizkurve_converter import (
+    FUSSPUNKT_MAX,
+    FUSSPUNKT_MIN,
+    NORM_VORLAUF_MAX,
+    NORM_VORLAUF_MIN,
+)
 from .remko_regs import (
     FIELD_ACTIVE,
     FIELD_MAXVALUE,
@@ -33,6 +39,10 @@ _TEMPERATURE_UNITS = {"C", "°C"}
 _DEFAULT_STEP = 0.5
 _TEMPERATURE_ICON = "mdi:temperature-celsius"
 _DEFAULT_ICON = "mdi:gauge"
+_HEIZKURVE_POINTS = {
+    "fusspunkt": (FUSSPUNKT_MIN, FUSSPUNKT_MAX),
+    "norm_vorlauftemperatur": (NORM_VORLAUF_MIN, NORM_VORLAUF_MAX),
+}
 
 
 async def async_setup_entry(
@@ -56,6 +66,25 @@ async def async_setup_entry(
         reg_type = reg_data[FIELD_REGTYPE]
         reg_id = reg_data[FIELD_REGID]
         active = reg_data.get(FIELD_ACTIVE, True)
+
+        if reg_type == "heizkurve":
+            for point, (low, high) in _HEIZKURVE_POINTS.items():
+                names = remko_reg_translation.get(f"{reg_name}_{point}")
+                entities.append(
+                    HeatPumpHeizkurveNumber(
+                        hass=hass,
+                        heatpump=heatpump,
+                        config_entry=config_entry,
+                        reg_name=reg_name,
+                        reg_id=reg_id,
+                        active=active,
+                        point=point,
+                        reg_min=low,
+                        reg_max=high,
+                        friendly_name=names[heatpump.langid] if names else None,
+                    )
+                )
+            continue
 
         # Only create number entities for sensor_temp_inp type that are available
         if reg_type not in _NUMBER_TYPES:
@@ -226,3 +255,63 @@ class HeatPumpNumber(NumberEntity):
         await self._heatpump.send_mqtt_reg(self._reg_name, value)
 
         _LOGGER.info("Value sent for %s: %s", self._reg_name, value)
+
+
+class HeatPumpHeizkurveNumber(HeatPumpNumber):
+    """Number entity for one point of the heating curve (register 1251)."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        heatpump: HeatPump,
+        config_entry: ConfigEntry,
+        reg_name: str,
+        reg_id: str,
+        active: bool,
+        point: str,
+        reg_min: float,
+        reg_max: float,
+        friendly_name: str | None,
+    ) -> None:
+        """Initialize heating curve point entity."""
+        super().__init__(
+            hass=hass,
+            heatpump=heatpump,
+            config_entry=config_entry,
+            reg_name=reg_name,
+            reg_id=reg_id,
+            active=active,
+            reg_type="sensor_temp_inp",
+            reg_unit=None,
+            reg_min=reg_min,
+            reg_max=reg_max,
+            friendly_name=friendly_name,
+        )
+        self._point = point
+        self._attr_unique_id = f"{heatpump.id}_{reg_name}_{point}"
+
+    def _point_value(self) -> float | None:
+        curve = self._heatpump.get_value(self._reg_id)
+        return curve.get(self._point) if isinstance(curve, dict) else None
+
+    async def async_update(self) -> None:
+        """Fetch latest value from heat pump and update state."""
+        value = self._point_value()
+        self._attr_available = value is not None
+        if value is not None:
+            self._attr_native_value = value
+
+    async def _async_update_from_event(self, event) -> None:
+        """Handle MQTT event and update state if changed."""
+        value = self._point_value()
+        if value is not None and value != self._attr_native_value:
+            self._attr_available = True
+            self._attr_native_value = value
+            self.async_write_ha_state()
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Write the new point; the heat pump gets the full curve register."""
+        if value == self._point_value():
+            return
+        await self._heatpump.set_heizkurve_point(self._reg_name, self._point, value)
+        _LOGGER.info("Heating curve %s sent: %s", self._point, value)
